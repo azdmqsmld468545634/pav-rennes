@@ -1,268 +1,343 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PAV Rennes Métropole - Points les plus proches</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        .loading-spinner {
-            border: 4px solid rgba(0, 0, 0, 0.1);
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            border-left-color: #059669;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .item-fade-in {
-            animation: fadeIn 0.5s ease-out forwards;
-            opacity: 0;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-    </style>
-</head>
-<body class="bg-slate-50 min-h-screen flex flex-col font-sans text-slate-900">
+import React, { useState, useEffect } from 'react';
+import { 
+  LucideRecycle, 
+  LucideMapPin, 
+  LucideNavigation, 
+  LucideClock, 
+  LucideRefreshCcw, 
+  LucideSearch
+} from 'lucide-react';
 
-    <!-- Header -->
-    <header class="bg-emerald-600 text-white p-4 shadow-md sticky top-0 z-50">
-        <div class="container mx-auto flex items-center justify-between">
-            <h1 class="text-xl font-bold flex items-center gap-2">
-                <i class="fas fa-recycle"></i> PAV Rennes
-            </h1>
-            <button onclick="window.location.reload()" class="p-2 hover:bg-emerald-700 rounded-full transition">
-                <i class="fas fa-redo-alt"></i>
-            </button>
+const App = () => {
+  const [userCoords, setUserCoords] = useState(null);
+  const [selectedFilter, setSelectedFilter] = useState('ve');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [statusText, setStatusText] = useState("Prêt pour la recherche");
+  const [manualAddress, setManualAddress] = useState("");
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  // Mise à jour de l'heure toutes les minutes
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const API_BASE = "https://data.rennesmetropole.fr/api/explore/v2.1/catalog/datasets/";
+  const DS_PAV = "points-apport-volontaire";
+  const DS_DECH = "decheteries_plateformes_vegetaux";
+
+  const filters = [
+    { id: 've', icon: 'fas fa-wine-bottle', label: 'Verre', color: 'text-emerald-600' },
+    { id: 'mm', icon: 'fas fa-box-open', label: 'Recyclable', color: 'text-yellow-600' },
+    { id: 'om', icon: 'fas fa-trash', label: 'Ordures', color: 'text-slate-600' },
+    { id: 'da', icon: 'fas fa-apple-whole', label: 'Bio-déchets', color: 'text-orange-700' },
+    { id: 'decheterie', icon: 'fas fa-warehouse', label: 'Déchèterie', color: 'text-blue-700', span: 'col-span-2' },
+  ];
+
+  const getLocation = () => {
+    setStatusText("Accès GPS...");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setUserCoords(coords);
+        setStatusText("GPS Actif");
+        findNearest(coords, selectedFilter);
+      },
+      () => setStatusText("GPS Inactif"),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  const handleManualSearch = async (e) => {
+    if (e) e.preventDefault();
+    const query = manualAddress.trim() || "Rennes";
+    
+    setStatusText(`Recherche...`);
+    try {
+      // Ajout de contexte géographique pour limiter les erreurs hors 35
+      const searchContext = query.toLowerCase().includes("35") ? "" : ", Ille-et-Vilaine";
+      const finalQuery = `${query}${searchContext}`;
+
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(finalQuery)}&limit=1`);
+      const data = await response.json();
+      
+      if (data && data.length > 0) {
+        const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+        setUserCoords(coords);
+        setStatusText(data[0].display_name.split(',')[0]);
+        findNearest(coords, selectedFilter);
+      } else {
+        setStatusText("Lieu introuvable");
+      }
+    } catch (err) {
+      setStatusText("Erreur service");
+    }
+  };
+
+  const findNearest = async (coords, filter) => {
+    setLoading(true);
+    setResults([]);
+    try {
+      const dataset = filter === 'decheterie' ? DS_DECH : DS_PAV;
+      const radius = filter === 'decheterie' ? "50000" : "20000";
+      let whereClause = `within_distance(geo_point_2d, geom'POINT(${coords.lng} ${coords.lat})', ${radius}m)`;
+      if (filter !== 'decheterie') whereClause += ` AND flux_${filter}=1`;
+
+      const url = `${API_BASE}${dataset}/records?limit=5&where=${encodeURIComponent(whereClause)}&order_by=${encodeURIComponent(`distance(geo_point_2d, geom'POINT(${coords.lng} ${coords.lat})')`)}`;
+      const response = await fetch(url);
+      const data = await response.json();
+      setResults(data.results || []);
+    } catch (e) {
+      console.error(e);
+      setStatusText("Erreur API");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const checkStatus = (horairesStr) => {
+    if (!horairesStr || horairesStr === "null") return { label: 'HORAIRES ?', color: 'slate' };
+    
+    const now = currentTime;
+    const todayIdx = now.getDay(); 
+    const currentMins = now.getHours() * 60 + now.getMinutes();
+    
+    const days = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+    const shortDays = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
+    
+    // Nettoyage intelligent des séparateurs
+    const h = horairesStr.toLowerCase()
+      .replace(/[\n\r]+/g, ' ## ')
+      .replace(/\//g, ' ## ')
+      .replace(/;/g, ' ## ')
+      .replace(/\|/g, ' ## ');
+      
+    const segments = h.split(' ## ');
+    let todayText = "";
+
+    for (let seg of segments) {
+      const s = seg.trim();
+      if (s.includes(days[todayIdx]) || s.includes(shortDays[todayIdx])) {
+        todayText = s;
+        break;
+      }
+      // Gestion des plages (ex: lundi au samedi)
+      if (s.includes(' au ') || s.includes(' à ') || s.includes('-')) {
+        const words = s.split(/[\s\-auà:]+/);
+        const sD = days.findIndex(d => words.includes(d)) !== -1 ? days.findIndex(d => words.includes(d)) : shortDays.findIndex(d => words.includes(d));
+        let eD = -1;
+        days.forEach((d, idx) => { if(s.includes(d)) eD = idx; });
+        if(eD === -1) shortDays.forEach((d, idx) => { if(s.includes(d)) eD = idx; });
+
+        if (sD !== -1 && eD !== -1) {
+          if (sD <= eD) {
+            if (todayIdx >= sD && todayIdx <= eD) todayText = s;
+          } else {
+            if (todayIdx >= sD || todayIdx <= eD) todayText = s;
+          }
+        }
+      }
+    }
+
+    if (!todayText) todayText = h; 
+    if (todayText.includes('fermé')) return { label: 'FERMÉ', color: 'red' };
+
+    // Extraction des heures (supporte 9h, 09h30, 09:00, etc.)
+    const timeMatches = todayText.match(/(\d+)h(\d+)?|(\d+):(\d+)/g);
+    if (!timeMatches || timeMatches.length < 2) return { label: 'OUVERT ?', color: 'slate' };
+
+    const parsedTimes = timeMatches.map(t => {
+      const parts = t.replace(':', 'h').split('h');
+      return parseInt(parts[0]) * 60 + (parseInt(parts[1]) || 0);
+    });
+
+    let nextOpening = null;
+    for (let i = 0; i < parsedTimes.length; i += 2) {
+      const start = parsedTimes[i];
+      const end = parsedTimes[i+1];
+      if (end === undefined) break;
+
+      // Si on est dans une plage d'ouverture
+      if (currentMins >= start && currentMins <= end) return { label: 'OUVERT', color: 'emerald' };
+      
+      // Si on est avant une ouverture
+      if (currentMins < start) {
+        if (nextOpening === null || start < nextOpening) nextOpening = start;
+      }
+    }
+
+    if (nextOpening !== null) {
+      const diff = nextOpening - currentMins;
+      const h_d = Math.floor(diff / 60);
+      const m_d = diff % 60;
+      return { 
+        label: h_d > 0 ? `OUVRE DANS ${h_d}H${m_d > 0 ? m_d : ''}` : `OUVRE DANS ${m_d} MIN`, 
+        color: 'amber' 
+      };
+    }
+    return { label: 'FERMÉ', color: 'red' };
+  };
+
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const d = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return d < 1 ? `${Math.round(d * 1000)} m` : `${d.toFixed(1)} km`;
+  };
+
+  return (
+    <div className="bg-slate-50 min-h-screen flex flex-col font-sans text-slate-900 pb-10">
+      <header className="bg-emerald-700 text-white p-5 shadow-lg sticky top-0 z-50 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <LucideRecycle className="w-7 h-7" />
+          <h1 className="text-xl font-black tracking-tight">Tri Rennes Métropole</h1>
         </div>
-    </header>
+        <button onClick={() => window.location.reload()} className="p-2 hover:bg-emerald-800 rounded-full transition active:rotate-180">
+          <LucideRefreshCcw className="w-5 h-5" />
+        </button>
+      </header>
 
-    <main class="container mx-auto p-4 flex-grow max-w-md">
+      <main className="container mx-auto p-4 flex-grow max-w-md space-y-6">
         
-        <!-- Section Localisation -->
-        <section class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mb-5">
-            <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">Départ</h2>
-            
-            <div id="location-status" class="mb-4 text-sm font-medium flex items-center gap-2 text-slate-600">
-                <i class="fas fa-location-crosshairs text-emerald-500"></i>
-                <span id="status-text">Prêt pour la recherche</span>
+        {/* Localisation One-Line Bar */}
+        <section className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 p-8">
+          <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 mb-6 text-center">Départ</h2>
+          <div className="flex flex-col gap-3">
+            <div className="flex gap-2 h-14">
+              <button 
+                onClick={getLocation} 
+                className="bg-emerald-100 text-emerald-700 px-4 rounded-2xl font-bold flex items-center justify-center gap-2 active:scale-95 transition shadow-sm whitespace-nowrap"
+                title="Ma position GPS"
+              >
+                <LucideNavigation className="w-5 h-5" />
+                <span className="hidden sm:inline">GPS</span>
+              </button>
+
+              <div className="relative flex-grow">
+                <input 
+                  type="text" 
+                  value={manualAddress}
+                  onChange={(e) => setManualAddress(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleManualSearch()}
+                  placeholder="Ville ou adresse..." 
+                  className="w-full h-full bg-slate-50 border-none rounded-2xl pl-5 pr-14 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-semibold shadow-inner"
+                />
+                <button 
+                  onClick={handleManualSearch} 
+                  className="absolute right-2 top-2 bottom-2 px-3 bg-emerald-600 text-white rounded-xl shadow-md active:scale-90 transition flex items-center justify-center"
+                >
+                  <LucideSearch className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
-            <div class="flex gap-2">
-                <button id="btn-gps" onclick="getLocation()" class="bg-emerald-100 text-emerald-700 px-4 py-2 rounded-xl font-bold hover:bg-emerald-200 transition flex items-center gap-2">
-                    <i class="fas fa-crosshairs"></i> GPS
-                </button>
-                <div class="relative flex-grow">
-                    <input type="text" id="address-input" placeholder="Adresse à Rennes..." class="w-full bg-slate-100 border-none rounded-xl py-2 pl-3 pr-10 focus:ring-2 focus:ring-emerald-500 outline-none text-sm h-full">
-                    <button onclick="geocodeAddress()" class="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-600">
-                        <i class="fas fa-search"></i>
-                    </button>
+            <div className="flex items-center justify-center gap-2 text-[10px] font-black text-emerald-600 mt-1">
+              <LucideMapPin className="w-3 h-3" /> {statusText}
+            </div>
+          </div>
+        </section>
+
+        {/* Filters */}
+        <section className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 p-8">
+          <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-slate-400 mb-5 text-center">Filtrer par type</h2>
+          <div className="grid grid-cols-3 gap-3">
+            {filters.map(f => (
+              <button 
+                key={f.id}
+                onClick={() => {
+                  setSelectedFilter(f.id);
+                  if (userCoords) findNearest(userCoords, f.id);
+                }}
+                className={`p-4 rounded-3xl flex flex-col items-center gap-2 transition-all active:scale-95 border-2 ${selectedFilter === f.id ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 bg-slate-50'} ${f.span || ''}`}
+              >
+                <div className={`text-xl ${f.color}`}><i className={f.icon}></i></div>
+                <span className="text-[8px] font-black uppercase tracking-tight">{f.label}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Results */}
+        <div className="space-y-5">
+          {loading && (
+            <div className="flex flex-col items-center p-12 space-y-4">
+              <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Recherche en cours...</p>
+            </div>
+          )}
+          
+          {results.map((r, i) => {
+            const isDech = selectedFilter === 'decheterie';
+            const name = isDech ? r.nom : (r.adresse_complete || r.localisation);
+            const address = isDech ? r.adresse : "";
+            const city = r.commune;
+            const dist = userCoords ? (calculateDistance(userCoords.lat, userCoords.lng, r.geo_point_2d.lat, r.geo_point_2d.lon)) : "--";
+            const hrs = r.horaires_ouverture || r.horaires || "";
+            const info = checkStatus(hrs);
+
+            const statusColors = {
+              'red': 'bg-red-50 text-red-700 border-red-100',
+              'emerald': 'bg-emerald-50 text-emerald-700 border-emerald-100',
+              'amber': 'bg-orange-50 text-orange-700 border-orange-100 animate-pulse',
+              'slate': 'bg-slate-50 text-slate-600 border-slate-100'
+            };
+
+            const navUrl = /iPhone|iPad|iPod/i.test(navigator.userAgent) 
+              ? `maps://maps.apple.com/?daddr=${r.geo_point_2d.lat},${r.geo_point_2d.lon}&dirflg=w`
+              : `https://www.google.com/maps/dir/?api=1&destination=${r.geo_point_2d.lat},${r.geo_point_2d.lon}&travelmode=walking`;
+
+            return (
+              <div key={i} className="bg-white rounded-[3rem] shadow-xl border border-slate-100 overflow-hidden item-fade-in" style={{animationDelay: `${i * 0.1}s`}}>
+                <div className="p-10">
+                  <div className="flex justify-between items-center mb-5">
+                    <span className="text-[10px] font-black uppercase text-slate-300 tracking-[0.2em]">{isDech ? 'Déchèterie' : 'Point de tri'}</span>
+                    <span className="text-xs font-black text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full">({dist})</span>
+                  </div>
+                  
+                  <h3 className="text-xl font-black text-slate-800 leading-tight mb-3 flex items-center flex-wrap gap-3">
+                    {name} 
+                    <span className={`text-[10px] font-black px-3.5 py-2 rounded-2xl border uppercase tracking-widest ${statusColors[info.color]}`}>
+                      {info.label}
+                    </span>
+                  </h3>
+                  
+                  <div className="space-y-1.5 mb-8">
+                    {address && <p className="text-sm text-slate-600 font-black">{address}</p>}
+                    <p className="text-xs text-slate-400 font-bold italic">{city}</p>
+                  </div>
+
+                  {isDech && (
+                    <details className="mb-8 group">
+                      <summary className="list-none cursor-pointer flex items-center gap-4 text-[11px] font-black uppercase text-slate-500 bg-slate-50 p-5 rounded-3xl group-open:bg-emerald-50 group-open:text-emerald-700 transition-all shadow-inner">
+                        <LucideClock className="w-5 h-5" /> HORAIRES DÉTAILLÉS
+                      </summary>
+                      <div className="mt-4 p-5 text-[12px] leading-relaxed text-slate-500 whitespace-pre-line border-l-4 border-emerald-200 ml-5 font-semibold">
+                        {hrs}
+                      </div>
+                    </details>
+                  )}
+
+                  <button 
+                    onClick={() => window.location.href = navUrl}
+                    className="w-full bg-slate-900 text-white py-6 rounded-[2rem] font-black text-sm flex items-center justify-center gap-4 active:scale-[0.98] transition shadow-2xl shadow-slate-300"
+                  >
+                    <i className="fas fa-location-arrow text-xl"></i> ITINÉRAIRE
+                  </button>
                 </div>
-            </div>
-        </section>
-
-        <!-- Section Filtres -->
-        <section class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mb-5">
-            <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">Type de tri</h2>
-            <div class="grid grid-cols-2 gap-3">
-                <button onclick="setFilter('ve')" id="filter-ve" class="filter-btn border-2 border-slate-100 p-3 rounded-2xl flex flex-col items-center gap-2 transition active:scale-95 bg-slate-50">
-                    <i class="fas fa-wine-bottle text-emerald-600 text-xl"></i>
-                    <span class="text-[10px] font-bold uppercase">Verre</span>
-                </button>
-                <button onclick="setFilter('mm')" id="filter-mm" class="filter-btn border-2 border-slate-100 p-3 rounded-2xl flex flex-col items-center gap-2 transition active:scale-95 bg-slate-50">
-                    <i class="fas fa-box-open text-yellow-600 text-xl"></i>
-                    <span class="text-[10px] font-bold uppercase">Recyclable</span>
-                </button>
-                <button onclick="setFilter('om')" id="filter-om" class="filter-btn border-2 border-slate-100 p-3 rounded-2xl flex flex-col items-center gap-2 transition active:scale-95 bg-slate-50">
-                    <i class="fas fa-trash text-slate-600 text-xl"></i>
-                    <span class="text-[10px] font-bold uppercase">Ordures</span>
-                </button>
-                <button onclick="setFilter('da')" id="filter-da" class="filter-btn border-2 border-slate-100 p-3 rounded-2xl flex flex-col items-center gap-2 transition active:scale-95 bg-slate-50">
-                    <i class="fas fa-leaf text-orange-700 text-xl"></i>
-                    <span class="text-[10px] font-bold uppercase">Bio-déchets</span>
-                </button>
-            </div>
-        </section>
-
-        <!-- Loader -->
-        <div id="loader" class="hidden flex flex-col items-center justify-center p-10 text-center">
-            <div class="loading-spinner mb-3"></div>
-            <p class="text-sm text-slate-500">Recherche des points à proximité...</p>
-        </div>
-
-        <!-- Container des résultats -->
-        <div id="results-container" class="space-y-4 mb-8">
-            <!-- Les cartes seront injectées ici par JS -->
-        </div>
-
-    </main>
-
-    <footer class="p-6 text-center text-slate-400 text-[10px] leading-relaxed">
-        Source : data.rennesmetropole.fr<br>
-        Optimisé pour smartphone
-    </footer>
-
-    <script>
-        let userCoords = null;
-        let selectedFilter = 've';
-        
-        // URL de base pointant vers le dataset des PAV
-        const BASE_API_URL = "https://data.rennesmetropole.fr/api/records/1.0/search/?dataset=points-apport-volontaire";
-
-        window.onload = () => {
-            setFilter('ve');
-        };
-
-        function setFilter(type) {
-            selectedFilter = type;
-            document.querySelectorAll('.filter-btn').forEach(btn => {
-                btn.classList.remove('border-emerald-500', 'bg-emerald-50', 'ring-1', 'ring-emerald-500');
-            });
-            const activeBtn = document.getElementById(`filter-${type}`);
-            if (activeBtn) {
-                activeBtn.classList.add('border-emerald-500', 'bg-emerald-50', 'ring-1', 'ring-emerald-500');
-            }
-            
-            if (userCoords) findNearest();
-        }
-
-        function getLocation() {
-            const status = document.getElementById('status-text');
-            status.innerText = "Demande d'accès GPS...";
-            
-            navigator.geolocation.getCurrentPosition(
-                (position) => {
-                    userCoords = {
-                        lat: position.coords.latitude,
-                        lng: position.coords.longitude
-                    };
-                    status.innerText = "Position GPS active";
-                    findNearest();
-                },
-                (err) => {
-                    status.innerText = "Erreur GPS : " + (err.message || "Accès refusé");
-                },
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+              </div>
             );
-        }
+          })}
+        </div>
+      </main>
 
-        async function geocodeAddress() {
-            const query = document.getElementById('address-input').value;
-            if (!query) return;
+      <footer className="p-10 text-center space-y-2 opacity-50">
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Rennes Métropole Open Data</p>
+      </footer>
+    </div>
+  );
+};
 
-            const status = document.getElementById('status-text');
-            status.innerText = "Recherche d'adresse...";
-            try {
-                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query + " Rennes")}&limit=1`);
-                const data = await response.json();
-                if (data && data.length > 0) {
-                    userCoords = {
-                        lat: parseFloat(data[0].lat),
-                        lng: parseFloat(data[0].lon)
-                    };
-                    status.innerText = "Départ : " + data[0].display_name.split(',')[0];
-                    findNearest();
-                } else {
-                    status.innerText = "Adresse non trouvée";
-                }
-            } catch (e) {
-                status.innerText = "Erreur service d'adresse";
-            }
-        }
-
-        async function findNearest() {
-            if (!userCoords) return;
-
-            const loader = document.getElementById('loader');
-            const container = document.getElementById('results-container');
-            
-            loader.classList.remove('hidden');
-            container.innerHTML = ""; // Vider les anciens résultats
-
-            try {
-                // On demande les 5 points les plus proches (rows=5) dans un rayon de 20km
-                const url = `${BASE_API_URL}&rows=5&refine.flux_${selectedFilter}=1&geofilter.distance=${userCoords.lat},${userCoords.lng},20000`;
-                
-                const response = await fetch(url);
-                if (!response.ok) throw new Error('API Error');
-                
-                const data = await response.json();
-
-                if (!data.records || data.records.length === 0) {
-                    container.innerHTML = `
-                        <div class="bg-amber-50 text-amber-800 p-4 rounded-xl text-center text-sm border border-amber-100">
-                            Aucun point trouvé pour ce type de déchet à proximité.
-                        </div>`;
-                    return;
-                }
-
-                data.records.forEach((record, index) => {
-                    displayResultCard(record, index);
-                });
-
-            } catch (error) {
-                console.error(error);
-                alert("Erreur de connexion aux données.");
-            } finally {
-                loader.classList.add('hidden');
-            }
-        }
-
-        function displayResultCard(record, index) {
-            const container = document.getElementById('results-container');
-            const fields = record.fields;
-            const addressText = fields.adresse_complete || fields.localisation || "Adresse non précisée";
-            const cityText = fields.commune || "Rennes Métropole";
-            
-            const destLat = fields.geo_point_2d[0];
-            const destLng = fields.geo_point_2d[1];
-            const d = calculateDistance(userCoords.lat, userCoords.lng, destLat, destLng);
-            const distLabel = d < 1 ? Math.round(d * 1000) + " m" : d.toFixed(1) + " km";
-
-            // Construction du lien de navigation
-            let navUrl = `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}&travelmode=walking`;
-            if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-                navUrl = `maps://maps.apple.com/?daddr=${destLat},${destLng}&dirflg=w`;
-            }
-
-            const cardHtml = `
-                <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden item-fade-in" style="animation-delay: ${index * 0.1}s">
-                    <div class="p-4">
-                        <div class="flex justify-between items-start mb-2">
-                            <span class="text-[10px] font-extrabold uppercase tracking-widest text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Point n°${index + 1}</span>
-                            <span class="text-sm font-bold text-slate-700">${distLabel}</span>
-                        </div>
-                        <h3 class="text-base font-bold text-slate-800 mb-1 leading-tight">${addressText}</h3>
-                        <p class="text-xs text-slate-500 mb-4 flex items-center gap-1">
-                            <i class="fas fa-map-marker-alt text-emerald-500"></i> ${cityText}
-                        </p>
-                        <button onclick="window.location.href='${navUrl}'" class="w-full bg-slate-900 text-white py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-black transition active:scale-[0.98]">
-                            <i class="fas fa-location-arrow"></i>
-                            Y ALLER
-                        </button>
-                    </div>
-                </div>
-            `;
-
-            container.insertAdjacentHTML('beforeend', cardHtml);
-        }
-
-        function calculateDistance(lat1, lon1, lat2, lon2) {
-            const R = 6371;
-            const dLat = (lat2 - lat1) * Math.PI / 180;
-            const dLon = (lon2 - lon1) * Math.PI / 180;
-            const a = 
-                Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-            return R * c;
-        }
-    </script>
-</body>
-</html>
+export default App;
