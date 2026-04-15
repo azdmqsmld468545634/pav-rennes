@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PAV Rennes Métropole - Point le plus proche</title>
+    <title>PAV Rennes Métropole - Points les plus proches</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
@@ -19,11 +19,12 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        .animate-in {
-            animation: fadeIn 0.4s ease-out;
+        .item-fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
+            opacity: 0;
         }
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
+            from { opacity: 0; transform: translateY(15px); }
             to { opacity: 1; transform: translateY(0); }
         }
     </style>
@@ -44,7 +45,7 @@
 
     <main class="container mx-auto p-4 flex-grow max-w-md">
         
-        <!-- Localisation Section -->
+        <!-- Section Localisation -->
         <section class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mb-5">
             <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">Départ</h2>
             
@@ -66,7 +67,7 @@
             </div>
         </section>
 
-        <!-- Filtres Section -->
+        <!-- Section Filtres -->
         <section class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 mb-5">
             <h2 class="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4">Type de tri</h2>
             <div class="grid grid-cols-2 gap-3">
@@ -89,49 +90,33 @@
             </div>
         </section>
 
-        <!-- Result Section -->
+        <!-- Loader -->
         <div id="loader" class="hidden flex flex-col items-center justify-center p-10 text-center">
             <div class="loading-spinner mb-3"></div>
-            <p class="text-sm text-slate-500">Interrogation de Rennes Métropole...</p>
+            <p class="text-sm text-slate-500">Recherche des points à proximité...</p>
         </div>
 
-        <section id="result-card" class="hidden animate-in">
-            <div class="bg-white rounded-3xl shadow-xl overflow-hidden border border-emerald-100">
-                <div class="bg-emerald-50 p-4 border-b border-emerald-100 flex justify-between items-center">
-                    <span class="text-emerald-700 font-bold text-xs uppercase tracking-widest">Le plus proche</span>
-                    <span id="result-distance" class="bg-emerald-600 text-white px-3 py-1 rounded-full text-sm font-bold shadow-sm">-- m</span>
-                </div>
-                <div class="p-6">
-                    <h3 id="result-address" class="text-xl font-extrabold text-slate-800 mb-2 leading-tight">--</h3>
-                    <p id="result-details" class="text-sm text-slate-500 mb-8 flex items-center gap-2">
-                        <i class="fas fa-map-marker-alt text-emerald-500"></i> <span id="result-commune">Rennes Métropole</span>
-                    </p>
-                    
-                    <button id="btn-navigate" class="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 shadow-lg hover:bg-black transition active:scale-[0.98]">
-                        <i class="fas fa-location-arrow"></i>
-                        NAVIGUER ICI
-                    </button>
-                </div>
-            </div>
-        </section>
+        <!-- Container des résultats -->
+        <div id="results-container" class="space-y-4 mb-8">
+            <!-- Les cartes seront injectées ici par JS -->
+        </div>
 
     </main>
 
     <footer class="p-6 text-center text-slate-400 text-[10px] leading-relaxed">
         Source : data.rennesmetropole.fr<br>
-        Optimisé pour Android & iOS
+        Optimisé pour smartphone
     </footer>
 
     <script>
         let userCoords = null;
         let selectedFilter = 've';
         
-        // Nouvelle méthode utilisant geofilter.distance de l'API
+        // URL de base pointant vers le dataset des PAV
         const BASE_API_URL = "https://data.rennesmetropole.fr/api/records/1.0/search/?dataset=points-apport-volontaire";
 
         window.onload = () => {
             setFilter('ve');
-            // On ne lance pas le GPS automatiquement pour éviter de bloquer l'UI au démarrage
         };
 
         function setFilter(type) {
@@ -162,7 +147,6 @@
                 },
                 (err) => {
                     status.innerText = "Erreur GPS : " + (err.message || "Accès refusé");
-                    console.error("Geolocation error:", err);
                 },
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
@@ -188,7 +172,6 @@
                     status.innerText = "Adresse non trouvée";
                 }
             } catch (e) {
-                console.error("Geocoding error:", e);
                 status.innerText = "Erreur service d'adresse";
             }
         }
@@ -197,72 +180,77 @@
             if (!userCoords) return;
 
             const loader = document.getElementById('loader');
-            const resultCard = document.getElementById('result-card');
+            const container = document.getElementById('results-container');
             
             loader.classList.remove('hidden');
-            resultCard.classList.add('hidden');
+            container.innerHTML = ""; // Vider les anciens résultats
 
             try {
-                // Utilisation de geofilter.distance de l'API (lat, lng, distance_en_metres)
-                // On demande 1 seul record, trié par distance
-                const url = `${BASE_API_URL}&rows=1&refine.flux_${selectedFilter}=1&geofilter.distance=${userCoords.lat},${userCoords.lng},20000`;
+                // On demande les 5 points les plus proches (rows=5) dans un rayon de 20km
+                const url = `${BASE_API_URL}&rows=5&refine.flux_${selectedFilter}=1&geofilter.distance=${userCoords.lat},${userCoords.lng},20000`;
                 
                 const response = await fetch(url);
-                if (!response.ok) throw new Error('API Response not ok');
+                if (!response.ok) throw new Error('API Error');
                 
                 const data = await response.json();
 
                 if (!data.records || data.records.length === 0) {
-                    alert("Aucun point de ce type à moins de 20km.");
+                    container.innerHTML = `
+                        <div class="bg-amber-50 text-amber-800 p-4 rounded-xl text-center text-sm border border-amber-100">
+                            Aucun point trouvé pour ce type de déchet à proximité.
+                        </div>`;
                     return;
                 }
 
-                const nearest = data.records[0];
-                displayResult(nearest);
+                data.records.forEach((record, index) => {
+                    displayResultCard(record, index);
+                });
 
             } catch (error) {
-                console.error("API error:", error);
-                alert("Erreur de connexion aux données de la ville.");
+                console.error(error);
+                alert("Erreur de connexion aux données.");
             } finally {
                 loader.classList.add('hidden');
             }
         }
 
-        function displayResult(record) {
-            const card = document.getElementById('result-card');
-            const addr = document.getElementById('result-address');
-            const dist = document.getElementById('result-distance');
-            const commune = document.getElementById('result-commune');
-            const btnNav = document.getElementById('btn-navigate');
-
-            // Extraction des données
+        function displayResultCard(record, index) {
+            const container = document.getElementById('results-container');
             const fields = record.fields;
-            const addressText = fields.adresse_complete || fields.localisation || "Point sans adresse précise";
+            const addressText = fields.adresse_complete || fields.localisation || "Adresse non précisée";
             const cityText = fields.commune || "Rennes Métropole";
             
-            // Calcul de distance précise (car l'API ne la donne pas directement dans le record v1)
             const destLat = fields.geo_point_2d[0];
             const destLng = fields.geo_point_2d[1];
             const d = calculateDistance(userCoords.lat, userCoords.lng, destLat, destLng);
+            const distLabel = d < 1 ? Math.round(d * 1000) + " m" : d.toFixed(1) + " km";
 
-            addr.innerText = addressText;
-            commune.innerText = cityText;
-            dist.innerText = d < 1 ? Math.round(d * 1000) + " m" : d.toFixed(1) + " km";
+            // Construction du lien de navigation
+            let navUrl = `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}&travelmode=walking`;
+            if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+                navUrl = `maps://maps.apple.com/?daddr=${destLat},${destLng}&dirflg=w`;
+            }
 
-            btnNav.onclick = () => {
-                // Lien de navigation optimisé
-                const url = `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}&travelmode=walking`;
-                
-                // Détection iOS pour Apple Maps
-                if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-                    window.location.href = `maps://maps.apple.com/?daddr=${destLat},${destLng}&dirflg=w`;
-                } else {
-                    window.location.href = url;
-                }
-            };
+            const cardHtml = `
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden item-fade-in" style="animation-delay: ${index * 0.1}s">
+                    <div class="p-4">
+                        <div class="flex justify-between items-start mb-2">
+                            <span class="text-[10px] font-extrabold uppercase tracking-widest text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Point n°${index + 1}</span>
+                            <span class="text-sm font-bold text-slate-700">${distLabel}</span>
+                        </div>
+                        <h3 class="text-base font-bold text-slate-800 mb-1 leading-tight">${addressText}</h3>
+                        <p class="text-xs text-slate-500 mb-4 flex items-center gap-1">
+                            <i class="fas fa-map-marker-alt text-emerald-500"></i> ${cityText}
+                        </p>
+                        <button onclick="window.location.href='${navUrl}'" class="w-full bg-slate-900 text-white py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-black transition active:scale-[0.98]">
+                            <i class="fas fa-location-arrow"></i>
+                            Y ALLER
+                        </button>
+                    </div>
+                </div>
+            `;
 
-            card.classList.remove('hidden');
-            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            container.insertAdjacentHTML('beforeend', cardHtml);
         }
 
         function calculateDistance(lat1, lon1, lat2, lon2) {
